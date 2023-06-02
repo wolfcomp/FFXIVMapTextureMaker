@@ -1,4 +1,5 @@
-﻿using System.Drawing;
+﻿using System.Collections;
+using System.Drawing;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 using Lumina.Data;
@@ -12,6 +13,11 @@ namespace FFXIVMapTextureMaker;
 internal class MapTextureGenerator
 {
     private static string mapFileFormat = "ui/map/{0}/{1}{2}_{3}.tex";
+    private static string icoFileFormat = "ui/icon/{0:D3}000/{1:D6}_hr1.tex";
+    public static List<Icon> Icons = new ();
+
+
+    public static int IconUidNext;
 
     public static unsafe Bitmap GenerateBaseTexture(Map map, string size)
     {
@@ -51,8 +57,9 @@ internal class MapTextureGenerator
         return GenerateBaseTexture(map, "m");
     }
 
-    public static unsafe Bitmap AddIconToMap(Bitmap bitmap, string icoPath, int x, int y)
+    public static unsafe Bitmap AddIconToMap(Bitmap bitmap, int icon, int x, int y, float scale = 1f)
     {
+        var icoPath = string.Format(icoFileFormat, icon / 1000, icon);
         var icoFile = Program.GameData.GetFile<TexFile>(icoPath);
         var icoTex = TextureBuffer.FromStream(icoFile.Header, icoFile.Reader);
         var icoData = icoTex.Filter(0, 0, TexFile.TextureFormat.B8G8R8A8).RawData;
@@ -60,9 +67,22 @@ internal class MapTextureGenerator
         {
             var ptr = (nint)p;
             using var tmpImage = new Bitmap(icoTex.Width, icoTex.Height, icoTex.Width * 4, PixelFormat.Format32bppArgb, ptr);
+            using var scaledImg = new Bitmap(tmpImage, (int)(tmpImage.Width * scale), (int)(tmpImage.Height * scale));
             using var g = Graphics.FromImage(bitmap);
-            g.DrawImage(tmpImage, x, y);
+            g.DrawImage(scaledImg, x, y);
         }
         return bitmap;
     }
+}
+
+public record Icon
+{
+    private readonly int _uid = MapTextureGenerator.IconUidNext++;
+    public int Uid => _uid;
+    public int Id { get; set; }
+    public float X { get; set; }
+    public float Y { get; set; }
+    public float Scale { get; set; }
+    public int MapX => 0;
+    public int MapY => 0;
 }
