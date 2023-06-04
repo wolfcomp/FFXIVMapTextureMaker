@@ -1,12 +1,14 @@
-﻿using System.Collections;
-using System.Drawing;
+﻿using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
-using Lumina.Data;
+using System.Text;
 using Lumina.Data.Files;
 using Lumina.Data.Parsing.Tex.Buffers;
 using Lumina.Excel.GeneratedSheets;
-using Lumina.Models.Materials;
+using Lumina.Text;
+using Lumina.Text.Expressions;
+using Lumina.Text.Payloads;
 
 namespace FFXIVMapTextureMaker;
 
@@ -14,8 +16,9 @@ internal class MapTextureGenerator
 {
     private static string mapFileFormat = "ui/map/{0}/{1}{2}_{3}.tex";
     private static string icoFileFormat = "ui/icon/{0:D3}000/{1:D6}_hr1.tex";
-    public static List<Icon> Icons = new ();
-
+    private static Graphics _graphics;
+    public static List<Icon> Icons = new();
+    public static List<Tuple<float, float, string, byte, int, Color>> Texts = new();
 
     public static int IconUidNext;
 
@@ -25,30 +28,51 @@ internal class MapTextureGenerator
         var filePath = string.Format(mapFileFormat, map.Id, fileName, string.Empty, size);
         var file = Program.GameData.GetFile<TexFile>(filePath);
         var tex = TextureBuffer.FromStream(file.Header, file.Reader);
-        var data = tex.Filter(0, 0, TexFile.TextureFormat.B8G8R8A8).RawData;
+        var data = tex.Filter(0, 0, TexFile.TextureFormat.B8G8R8A8).RawData.Chunk(4).Select(t => new B8G8R8A8(t[0], t[1], t[2], t[3])).ToArray();
 
         var maskPath = string.Format(mapFileFormat, map.Id, fileName, "m", size);
         var maskFile = Program.GameData.GetFile<TexFile>(maskPath);
         if (maskFile != null && maskFile.Header.Height == tex.Height && maskFile.Header.Width == tex.Width)
         {
             var maskTex = TextureBuffer.FromStream(maskFile.Header, maskFile.Reader);
-            var maskData = maskTex.Filter(0, 0, TexFile.TextureFormat.B8G8R8A8).RawData;
-            for (var i = 0; i < data.Length; i += 4)
+            var maskData = maskTex.Filter(0, 0, TexFile.TextureFormat.B8G8R8A8).RawData.Chunk(4).Select(t => new B8G8R8A8(t[0], t[1], t[2], t[3])).ToArray();
+            for (var i = 0; i < data.Length; i++)
             {
-                if (maskData[i + 3] != 0) continue;
                 data[i] *= maskData[i];
-                data[i + 1] *= maskData[i + 1];
-                data[i + 2] *= maskData[i + 2];
+            }
+        }
+
+        var mapMarkers = Program.GameData.GetExcelSheet<MapMarker>().Where(t => t.RowId == map.MapMarkerRange);
+        foreach (var mapMarker in mapMarkers)
+        {
+            var x = mapMarker.X / 2048f * 42;
+            var y = mapMarker.Y / 2048f * 42;
+            if (mapMarker.Icon != 0)
+                Icons.Add(new Icon
+                {
+                    UseWorld = false,
+                    Id = mapMarker.Icon,
+                    Scale = .5f,
+                    X = x,
+                    Y = y,
+                });
+            var placeName = mapMarker.PlaceNameSubtext.Value;
+            if (placeName != null)
+            {
+                var t = GetStringFromSeString(placeName.Name);
+                if (!string.IsNullOrWhiteSpace(t))
+                    Texts.Add(new Tuple<float, float, string, byte, int, Color>(x, y, t, mapMarker.SubtextOrientation, 18, Color.FromArgb(52, 52, 52)));
             }
         }
 
         Bitmap img;
-        fixed (byte* p = data)
+        fixed (byte* p = data.SelectMany(t => t.GetBytes()).ToArray())
         {
             var ptr = (nint)p;
             using var tmpImage = new Bitmap(tex.Width, tex.Height, tex.Width * 4, PixelFormat.Format32bppArgb, ptr);
             img = new Bitmap(tmpImage);
         }
+        _graphics = Graphics.FromImage(img);
         return img;
     }
 
@@ -57,21 +81,115 @@ internal class MapTextureGenerator
         return GenerateBaseTexture(map, "m");
     }
 
-    public static unsafe Bitmap AddIconToMap(Bitmap bitmap, int icon, int x, int y, float scale = 1f)
+    public static unsafe Bitmap AddIconToMap(Bitmap bitmap, int icon, int x, int y, float scale, Color overlay)
     {
         var icoPath = string.Format(icoFileFormat, icon / 1000, icon);
         var icoFile = Program.GameData.GetFile<TexFile>(icoPath);
         var icoTex = TextureBuffer.FromStream(icoFile.Header, icoFile.Reader);
-        var icoData = icoTex.Filter(0, 0, TexFile.TextureFormat.B8G8R8A8).RawData;
-        fixed (byte* p = icoData)
+        var icoData = icoTex.Filter(0, 0, TexFile.TextureFormat.B8G8R8A8).RawData.Chunk(4).Select(t => new B8G8R8A8(t[0], t[1], t[2], t[3])).ToArray();
+        for (var i = 0; i < icoData.Length; i++)
+        {
+            icoData[i] *= overlay;
+        }
+        fixed (byte* p = icoData.SelectMany(t => t.GetBytes()).ToArray())
         {
             var ptr = (nint)p;
             using var tmpImage = new Bitmap(icoTex.Width, icoTex.Height, icoTex.Width * 4, PixelFormat.Format32bppArgb, ptr);
             using var scaledImg = new Bitmap(tmpImage, (int)(tmpImage.Width * scale), (int)(tmpImage.Height * scale));
             using var g = Graphics.FromImage(bitmap);
-            g.DrawImage(scaledImg, x, y);
+            g.DrawImage(scaledImg, x - scaledImg.Width / 2, y - scaledImg.Height / 2);
         }
         return bitmap;
+    }
+
+    public static Tuple<Bitmap, PointF>? AddTextToMap(string text, int x, int y, byte orientation, int emSize)
+    {
+        if (orientation == 0)
+            return null;
+        var size = emSize switch
+        {
+            96 => 0,
+            36 => 4,
+            18 => 3,
+            13 => 2,
+            _ => 1
+        };
+        var bitmap = Program.TextLayer.DrawText(text, size);
+        var point = orientation switch
+        {
+            2 => new PointF(x + emSize, y - bitmap.Height / 2),
+            4 => new PointF(x - bitmap.Width / 2, y - bitmap.Height),
+            3 => new PointF(x - bitmap.Width / 2, y + bitmap.Height / 2),
+            1 => new PointF(x - bitmap.Width + emSize, y - bitmap.Height / 2),
+            _ => new PointF(x - bitmap.Width / 2, y - bitmap.Height / 2)
+        };
+        return Tuple.Create(bitmap, point);
+    }
+
+    private static string GetStringFromSeString(SeString s)
+    {
+        var sb = new StringBuilder();
+        XmlRepr(sb, s);
+        return sb.ToString().Replace($"<NewLine />", "\n").Replace($"<Indent />", "\t").Replace($"<Hyphen />", "-");
+    }
+
+    public static string ProcessString(string s) => s.Replace("<NewLine />", "\n").Replace("<Indent />", "\t").Replace("<Hyphen />", "-");
+
+    public static string UnprocessString(string s) => s.Replace("\n", "<NewLine />").Replace("\t", "<Indent />").Replace("-", "<Hyphen />");
+
+    private static void XmlRepr(StringBuilder sb, SeString s)
+    {
+        foreach (var basePayload in s.Payloads)
+        {
+            if (basePayload is TextPayload t)
+                sb.Append(t.RawString);
+            else if (!basePayload.Expressions.Any())
+                sb.Append($"<{basePayload.PayloadType} />");
+            else
+            {
+                sb.Append($"<{basePayload.PayloadType}>");
+                foreach (var baseExpression in basePayload.Expressions)
+                    XmlRepr(sb, baseExpression);
+                sb.Append($"</{basePayload.PayloadType}>");
+            }
+        }
+    }
+
+    private static void XmlRepr(StringBuilder sb, BaseExpression expr)
+    {
+        switch (expr)
+        {
+            case PlaceholderExpression ple:
+                sb.Append('<').Append(ple.ExpressionType).Append(" />");
+                break;
+            case IntegerExpression ie:
+                sb.Append('<').Append(ie.ExpressionType).Append('>');
+                sb.Append(ie.Value);
+                sb.Append("</").Append(ie.ExpressionType).Append('>');
+                break;
+            case StringExpression se:
+                sb.Append('<').Append(se.ExpressionType).Append('>');
+                XmlRepr(sb, se.Value);
+                sb.Append("</").Append(se.ExpressionType).Append('>');
+                break;
+            case ParameterExpression pae:
+                sb.Append('<').Append(pae.ExpressionType).Append('>');
+                sb.Append("<operand>");
+                XmlRepr(sb, pae.Operand);
+                sb.Append("</operand>");
+                sb.Append("</").Append(pae.ExpressionType).Append('>');
+                break;
+            case BinaryExpression pae:
+                sb.Append('<').Append(pae.ExpressionType).Append('>');
+                sb.Append("<operand1>");
+                XmlRepr(sb, pae.Operand1);
+                sb.Append("</operand1>");
+                sb.Append("<operand2>");
+                XmlRepr(sb, pae.Operand2);
+                sb.Append("</operand2>");
+                sb.Append("</").Append(pae.ExpressionType).Append('>');
+                break;
+        }
     }
 }
 
@@ -82,7 +200,57 @@ public record Icon
     public int Id { get; set; }
     public float X { get; set; }
     public float Y { get; set; }
+    public bool UseWorld { get; set; }
     public float Scale { get; set; }
-    public int MapX => 0;
-    public int MapY => 0;
+    public Color OverlayColor { get; set; } = Color.White;
+
+    public int MapX(int mapWidth, Map map) =>
+        UseWorld switch
+        {
+            false => (int)(X / 42.0 * mapWidth),
+            true => (int)(WorldToMap(X, map.SizeFactor, map.OffsetX) / 42 * mapWidth)
+        };
+
+    public int MapY(int mapHeight, Map map) =>
+        UseWorld switch
+        {
+            false => (int)(Y / 42.0 * mapHeight),
+            true => (int)(WorldToMap(Y, map.SizeFactor, map.OffsetY) / 42 * mapHeight)
+        };
+
+    private static float WorldToMap(float value, uint scale, int offset) => 0.02f * offset + 2048f / scale + 0.02f * value + .5f;
+
+    public override string ToString()
+    {
+        return $"{Id},{X},{Y},{UseWorld},{Scale},{OverlayColor.R:X} {OverlayColor.G:X} {OverlayColor.B:X}";
+    }
+}
+
+[StructLayout(LayoutKind.Sequential)]
+public struct B8G8R8A8
+{
+    public byte B;
+    public byte G;
+    public byte R;
+    public byte A;
+
+    public B8G8R8A8(byte b, byte g, byte r, byte a)
+    {
+        R = r;
+        G = g;
+        B = b;
+        A = a;
+    }
+
+    public static B8G8R8A8 operator *(B8G8R8A8 a, B8G8R8A8 b)
+    {
+        return b.A == 0 ? a : new B8G8R8A8((byte)(a.B * b.B / 255), (byte)(a.G * b.G / 255), (byte)(a.R * b.R / 255), a.A);
+    }
+
+    public static B8G8R8A8 operator *(B8G8R8A8 a, Color b)
+    {
+        return a.A == 0 ? a : new B8G8R8A8((byte)(a.B * b.B / 255), (byte)(a.G * b.G / 255), (byte)(a.R * b.R / 255), a.A);
+    }
+
+    public byte[] GetBytes() => new[] { B, G, R, A };
 }

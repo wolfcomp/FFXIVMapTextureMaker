@@ -1,6 +1,8 @@
 ﻿using System.CommandLine;
-using System.CommandLine.Invocation;
 using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Drawing.Text;
+using System.Globalization;
 using System.Reflection;
 using Lumina;
 using Lumina.Excel.GeneratedSheets;
@@ -10,8 +12,10 @@ namespace FFXIVMapTextureMaker;
 public class Program
 {
     public static GameData GameData;
+    public static TextLayer TextLayer;
     private int _page;
     private List<Map> maps;
+    private Map _selectedMap;
     private Bitmap _baseTexture;
     private RootCommand _rootCommand;
     private bool handleCommands;
@@ -52,6 +56,7 @@ public class Program
         }
 
         maps = GameData.GetExcelSheet<Map>()!.Where(t => !string.IsNullOrWhiteSpace(t.Id) && t.RowId != 10).ToList();
+        TextLayer = new TextLayer();
         await Task.Delay(TimeSpan.FromSeconds(1));
         await SelectMap();
     }
@@ -83,9 +88,9 @@ public class Program
                 case ConsoleKey.D8:
                 case ConsoleKey.D9:
                     var i = (int)input.Key - 49;
-                    var map = maps.Skip(_page * 9).Take(9).Skip(i).First();
-                    Console.WriteLine($"Generating base texture for {map.PlaceName.Value?.Name}");
-                    _baseTexture = MapTextureGenerator.GenerateBaseTexture(map);
+                    _selectedMap = maps.Skip(_page * 9).Take(9).Skip(i).First();
+                    Console.WriteLine($"Generating base texture for {_selectedMap.PlaceName.Value?.Name}");
+                    _baseTexture = MapTextureGenerator.GenerateBaseTexture(_selectedMap);
                     await ProcessFurtherCommands();
                     PrintMaps();
                     break;
@@ -108,33 +113,71 @@ public class Program
         generate.AddAlias("save");
         generate.SetHandler(GenerateTexture, generateOption);
         _rootCommand.AddCommand(generate);
-        var add = new Command("add")
-        {
-            new Option<int>("--id", "The id of the icon."),
-            new Option<float>("--scale", "Scale the icon."),
-            new Option<float>("--x", "The x position of the icon in map coords."),
-            new Option<float>("--y", "The y position of the icon in map coords.")
-        };
-        add.SetHandler(() =>
-        {
-            Console.WriteLine("Not implemented yet.");
-        });
+        var addId = new Option<int>("--id", "The id of the icon.");
+        var scale = new Option<float>("--scale", "Scale the icon.");
+        var x = new Option<float?>("--x", "The x position of the icon in map coords.");
+        var y = new Option<float?>("--y", "The y position of the icon in map coords.");
+        var worldX = new Option<float?>("--worldX", "The x position of the icon in world coords.");
+        var worldY = new Option<float?>("--worldY", "The y position of the icon in world coords.");
+        var add = new Command("add") { addId, scale, x, y, worldX, worldY };
+        add.SetHandler(AddIcon, addId, scale, x, y, worldX, worldY);
         _rootCommand.AddCommand(add);
+        var uid = new Option<int>("--uid", "The id of the icon to remove.");
         var remove = new Command("remove")
         {
-            new Option<int>("--uid", "The id of the icon to remove.")
+            uid
         };
-        remove.SetHandler(() => 
+        remove.SetHandler((uid) =>
         {
-            Console.WriteLine("Not implemented yet.");
-        });
+            MapTextureGenerator.Icons.RemoveAll(t => t.Uid == uid);
+        }, uid);
         _rootCommand.AddCommand(remove);
         var list = new Command("list");
         list.SetHandler(() =>
         {
-            Console.WriteLine("Not implemented yet.");
+            foreach (var icon in MapTextureGenerator.Icons)
+            {
+                Console.WriteLine($"Uid: {icon.Uid} Id: {icon.Id} Scale: {icon.Scale} X: {icon.MapX(_baseTexture.Width, _selectedMap)} Y: {icon.MapY(_baseTexture.Height, _selectedMap)} UseWorld: {icon.UseWorld}");
+            }
         });
         _rootCommand.AddCommand(list);
+        var loadOption = new Option<string>("--file", "The file to load the icons from.");
+        var load = new Command("load", "Loads .icons.csv and .texts.csv file to place all icons and text into memory")
+        {
+            loadOption
+        };
+        load.SetHandler((filePath) =>
+        {
+            if (!File.Exists(filePath + ".icons.csv") && !File.Exists(filePath + ".texts.csv"))
+            {
+                Console.WriteLine("File does not exist.");
+                return;
+            }
+            Console.WriteLine("Loading...");
+            MapTextureGenerator.Icons = File.ReadAllLines(filePath + ".icons.csv").Skip(1).Select(t =>
+            {
+                //Id,X,Y,UseWorld,Scale
+                var args = t.Split(',');
+                var color = args[5].Split(' ').Select(s => byte.Parse(s, NumberStyles.AllowHexSpecifier)).ToArray();
+                return new Icon
+                {
+                    Id = int.Parse(args[0]),
+                    X = float.Parse(args[1]),
+                    Y = float.Parse(args[2]),
+                    UseWorld = bool.Parse(args[3]),
+                    Scale = float.Parse(args[4]),
+                    OverlayColor = Color.FromArgb(color[0], color[1], color[2])
+                };
+            }).ToList();
+            MapTextureGenerator.Texts = File.ReadAllLines(filePath + ".texts.csv").Skip(1).Select(t =>
+            {
+                var args = t.Split(',');
+                var color = args[5].Split(' ').Select(s => byte.Parse(s, NumberStyles.AllowHexSpecifier)).ToArray();
+                return Tuple.Create(float.Parse(args[0]), float.Parse(args[1]), MapTextureGenerator.ProcessString(args[2]), byte.Parse(args[3]), int.Parse(args[4]), Color.FromArgb(color[0], color[1], color[2]));
+            }).ToList();
+            Console.WriteLine("Loaded!");
+        }, loadOption);
+        _rootCommand.AddCommand(load);
         var exit = new Command("exit");
         exit.AddAlias("quit");
         exit.SetHandler(() => Environment.Exit(0));
@@ -145,6 +188,33 @@ public class Program
             handleCommands = false;
         });
         _rootCommand.AddCommand(newCommand);
+    }
+
+    private static void AddIcon(int id, float scale, float? x, float? y, float? worldX, float? worldY)
+    {
+        switch (x)
+        {
+            case null when y is null && worldX is null && worldY is null:
+                Console.WriteLine("You must specify either x and y or worldX and worldY");
+                return;
+            case null when y is null && (worldX is null || worldY is null):
+                Console.WriteLine("You must specify both x and y or worldX and worldY");
+                return;
+            case not null when y is not null && (worldX is not null || worldY is not null):
+                Console.WriteLine("You must specify either x and y or worldX and worldY");
+                return;
+            default:
+                var worldCoords = x is null;
+                MapTextureGenerator.Icons.Add(new Icon
+                {
+                    Id = id,
+                    Scale = scale,
+                    UseWorld = worldCoords,
+                    X = worldCoords ? worldX!.Value : x!.Value,
+                    Y = worldCoords ? worldY!.Value : y!.Value
+                });
+                break;
+        }
     }
 
     private void GenerateTexture(string? output)
@@ -161,10 +231,22 @@ public class Program
             return;
         }
 
-        output = output.Split(".")[0] + ".png";
+        output = output.Split(".")[0];
         var bitmap = new Bitmap(_baseTexture);
-        bitmap = MapTextureGenerator.Icons.Aggregate(bitmap, (current, icon) => MapTextureGenerator.AddIconToMap(current, icon.Id, icon.MapX, icon.MapY, icon.Scale));
-        bitmap.Save(output);
+        bitmap = MapTextureGenerator.Icons.Aggregate(bitmap, (current, icon) => MapTextureGenerator.AddIconToMap(current, icon.Id, icon.MapX(_baseTexture.Width, _selectedMap), icon.MapY(_baseTexture.Height, _selectedMap), icon.Scale, icon.OverlayColor));
+        using var g = Graphics.FromImage(bitmap);
+        var p = MapTextureGenerator.Texts.Select(text => MapTextureGenerator.AddTextToMap(text.Item3, (int)(text.Item1 / 42 * _baseTexture.Width), (int)(text.Item2 / 42 * _baseTexture.Height), text.Item4, text.Item5)).Where(t => t != null).ToArray();
+        g.InterpolationMode = InterpolationMode.High;
+        g.SmoothingMode = SmoothingMode.HighQuality;
+        g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+        g.CompositingQuality = CompositingQuality.HighQuality;
+        foreach (var (b, point) in p)
+        {
+            g.DrawImage(b, point);
+        }
+        bitmap.Save(output + ".png");
+        File.WriteAllLines(output + ".icons.csv", MapTextureGenerator.Icons.Select(t => t.ToString()).Prepend("Id,X,Y,UseWorld,Scale,OverlayColor"));
+        File.WriteAllLines(output + ".texts.csv", MapTextureGenerator.Texts.Select(t => $"{t.Item1},{t.Item2},{MapTextureGenerator.UnprocessString(t.Item3)},{t.Item4},{t.Item5},{t.Item6.R:X} {t.Item6.G:X} {t.Item6.B:X}").Prepend("X,Y,Text,Orientation,FontSize,Color"));
     }
 
     private async Task ProcessFurtherCommands()
@@ -178,6 +260,10 @@ public class Program
                 continue;
             await _rootCommand.InvokeAsync(line);
         }
+        MapTextureGenerator.Icons.Clear();
+        MapTextureGenerator.Texts.Clear();
+        GC.Collect();
+        GC.WaitForFullGCComplete();
     }
 
     private void PrintMaps()
@@ -188,7 +274,7 @@ public class Program
         var k = 0;
         foreach (var map in maps.Skip(_page * 9).Take(9))
         {
-            Console.WriteLine($"{++k}: {map.PlaceName.Value?.Name}");
+            Console.WriteLine($"{++k}: {map.PlaceName.Value?.Name} - {map.PlaceNameSub.Value?.Name}");
         }
 
         Console.WriteLine("0: Exit");
