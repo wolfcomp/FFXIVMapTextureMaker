@@ -1,4 +1,6 @@
-﻿using Lumina.Data.Files;
+﻿// Copyright - https://github.com/Soreepeong/QuoteOfTheLobby/blob/main/LICENSE
+
+using Lumina.Data.Files;
 
 namespace FFXIVMapTextureMaker;
 

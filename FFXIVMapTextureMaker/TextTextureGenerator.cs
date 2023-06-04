@@ -1,11 +1,6 @@
-﻿using Lumina.Text;
-using Microsoft.VisualBasic;
-using System;
-using System.Collections.Generic;
+﻿// Copyright - https://github.com/Soreepeong/QuoteOfTheLobby/blob/main/LICENSE
+
 using System.Drawing;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace FFXIVMapTextureMaker;
 

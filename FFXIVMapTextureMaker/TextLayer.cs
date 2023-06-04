@@ -1,4 +1,6 @@
-﻿using System.Drawing;
+﻿// Copyright - https://github.com/Soreepeong/QuoteOfTheLobby/blob/main/LICENSE
+
+using System.Drawing;
 using System.Drawing.Imaging;
 
 namespace FFXIVMapTextureMaker;

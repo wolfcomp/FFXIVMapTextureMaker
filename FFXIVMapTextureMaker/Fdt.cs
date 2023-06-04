@@ -1,4 +1,5 @@
-﻿using Lumina.Text;
+﻿// Copyright - https://github.com/Soreepeong/QuoteOfTheLobby/blob/main/LICENSE
+
 using System.Runtime.InteropServices;
 
 namespace FFXIVMapTextureMaker;
