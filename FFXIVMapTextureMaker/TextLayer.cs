@@ -14,7 +14,7 @@ public class TextLayer
         _reader = new GameResourceReader();
     }
 
-    public unsafe Bitmap DrawText(string s, int size)
+    public unsafe Bitmap DrawText(string s, int size, Color color)
     {
         var fdt = _reader.Fdts[size];
         var texture = new TextTextureGenerator(_reader.FontTextureData, fdt)
@@ -25,7 +25,7 @@ public class TextLayer
             .WithBorderStrength(1)
             .WithMaxWidth(int.MaxValue)
             .WithBorderColor(Color.Black)
-            .WithFillColor(Color.White)
+            .WithFillColor(color)
             .WithHorizontalAlignment(Fdt.LayoutBuilder.HorizontalAlignment.Left);
         var ret = texture.Build();
         var fill = texture.WithBorderWidth(0).Build();

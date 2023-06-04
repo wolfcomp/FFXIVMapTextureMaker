@@ -1,5 +1,7 @@
 ﻿using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
+using System.Drawing.Text;
 using System.Runtime.InteropServices;
 using System.Text;
 using Lumina.Data.Files;
@@ -13,9 +15,8 @@ namespace FFXIVMapTextureMaker;
 
 internal class MapTextureGenerator
 {
-    private static string mapFileFormat = "ui/map/{0}/{1}{2}_{3}.tex";
-    private static string icoFileFormat = "ui/icon/{0:D3}000/{1:D6}_hr1.tex";
-    private static Graphics _graphics;
+    private const string _mapFileFormat = "ui/map/{0}/{1}{2}_{3}.tex";
+    private const string _icoFileFormat = "ui/icon/{0:D3}000/{1:D6}_hr1.tex";
     public static List<Icon> Icons = new();
     public static List<Tuple<float, float, string, byte, int, Color>> Texts = new();
 
@@ -24,12 +25,12 @@ internal class MapTextureGenerator
     public static unsafe Bitmap GenerateBaseTexture(Map map, string size)
     {
         var fileName = map.Id.ToString().Replace("/", "");
-        var filePath = string.Format(mapFileFormat, map.Id, fileName, string.Empty, size);
+        var filePath = string.Format(_mapFileFormat, map.Id, fileName, string.Empty, size);
         var file = Program.GameData.GetFile<TexFile>(filePath);
-        var tex = TextureBuffer.FromStream(file.Header, file.Reader);
+        var tex = TextureBuffer.FromStream(file!.Header, file.Reader);
         var data = tex.Filter(0, 0, TexFile.TextureFormat.B8G8R8A8).RawData.Chunk(4).Select(t => new B8G8R8A8(t[0], t[1], t[2], t[3])).ToArray();
 
-        var maskPath = string.Format(mapFileFormat, map.Id, fileName, "m", size);
+        var maskPath = string.Format(_mapFileFormat, map.Id, fileName, "m", size);
         var maskFile = Program.GameData.GetFile<TexFile>(maskPath);
         if (maskFile != null && maskFile.Header.Height == tex.Height && maskFile.Header.Width == tex.Width)
         {
@@ -41,11 +42,11 @@ internal class MapTextureGenerator
             }
         }
 
-        var mapMarkers = Program.GameData.GetExcelSheet<MapMarker>().Where(t => t.RowId == map.MapMarkerRange);
+        var mapMarkers = Program.GameData.GetExcelSheet<MapMarker>()!.Where(t => t.RowId == map.MapMarkerRange);
         foreach (var mapMarker in mapMarkers)
         {
-            var x = mapMarker.X / 2048f * 42;
-            var y = mapMarker.Y / 2048f * 42;
+            var x = mapMarker.X / 2048f * (4200f / map.SizeFactor + 0.012f * (map.SizeFactor - 100f));
+            var y = mapMarker.Y / 2048f * (4200f / map.SizeFactor + 0.012f * (map.SizeFactor - 100f));
             if (mapMarker.Icon != 0)
                 Icons.Add(new Icon
                 {
@@ -54,13 +55,14 @@ internal class MapTextureGenerator
                     Scale = .5f,
                     X = x,
                     Y = y,
+                    IsMapIcon = true
                 });
             var placeName = mapMarker.PlaceNameSubtext.Value;
             if (placeName != null)
             {
                 var t = GetStringFromSeString(placeName.Name);
                 if (!string.IsNullOrWhiteSpace(t))
-                    Texts.Add(new Tuple<float, float, string, byte, int, Color>(x, y, t, mapMarker.SubtextOrientation, 18, Color.FromArgb(52, 52, 52)));
+                    Texts.Add(new Tuple<float, float, string, byte, int, Color>(x, y, t, mapMarker.SubtextOrientation, 14, Color.White));
             }
         }
 
@@ -71,7 +73,6 @@ internal class MapTextureGenerator
             using var tmpImage = new Bitmap(tex.Width, tex.Height, tex.Width * 4, PixelFormat.Format32bppArgb, ptr);
             img = new Bitmap(tmpImage);
         }
-        _graphics = Graphics.FromImage(img);
         return img;
     }
 
@@ -82,9 +83,9 @@ internal class MapTextureGenerator
 
     public static unsafe Bitmap AddIconToMap(Bitmap bitmap, int icon, int x, int y, float scale, Color overlay)
     {
-        var icoPath = string.Format(icoFileFormat, icon / 1000, icon);
+        var icoPath = string.Format(_icoFileFormat, icon / 1000, icon);
         var icoFile = Program.GameData.GetFile<TexFile>(icoPath);
-        var icoTex = TextureBuffer.FromStream(icoFile.Header, icoFile.Reader);
+        var icoTex = TextureBuffer.FromStream(icoFile!.Header, icoFile.Reader);
         var icoData = icoTex.Filter(0, 0, TexFile.TextureFormat.B8G8R8A8).RawData.Chunk(4).Select(t => new B8G8R8A8(t[0], t[1], t[2], t[3])).ToArray();
         for (var i = 0; i < icoData.Length; i++)
         {
@@ -96,12 +97,16 @@ internal class MapTextureGenerator
             using var tmpImage = new Bitmap(icoTex.Width, icoTex.Height, icoTex.Width * 4, PixelFormat.Format32bppArgb, ptr);
             using var scaledImg = new Bitmap(tmpImage, (int)(tmpImage.Width * scale), (int)(tmpImage.Height * scale));
             using var g = Graphics.FromImage(bitmap);
+            g.InterpolationMode = InterpolationMode.High;
+            g.SmoothingMode = SmoothingMode.HighQuality;
+            g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+            g.CompositingQuality = CompositingQuality.HighQuality;
             g.DrawImage(scaledImg, x - scaledImg.Width / 2, y - scaledImg.Height / 2);
         }
         return bitmap;
     }
 
-    public static Tuple<Bitmap, PointF>? AddTextToMap(string text, int x, int y, byte orientation, int emSize)
+    public static Tuple<Bitmap, PointF>? AddTextToMap(string text, int x, int y, byte orientation, int emSize, Color color)
     {
         if (orientation == 0)
             return null;
@@ -113,7 +118,7 @@ internal class MapTextureGenerator
             13 => 2,
             _ => 1
         };
-        var bitmap = Program.TextLayer.DrawText(text, size);
+        var bitmap = Program.TextLayer.DrawText(text, size, color);
         var point = orientation switch
         {
             2 => new PointF(x + emSize, y - bitmap.Height / 2),
@@ -129,12 +134,12 @@ internal class MapTextureGenerator
     {
         var sb = new StringBuilder();
         XmlRepr(sb, s);
-        return sb.ToString().Replace($"<NewLine />", "\n").Replace($"<Indent />", "\t").Replace($"<Hyphen />", "-");
+        return ProcessString(sb.ToString());
     }
 
-    public static string ProcessString(string s) => s.Replace("<NewLine />", "\n").Replace("<Indent />", "\t").Replace("<Hyphen />", "-");
+    public static string ProcessString(string s) => s.Replace("<NewLine />", "\n").Replace("<Indent />", "\t").Replace("<Hyphen />", "-").Replace("<Italics />", "*");
 
-    public static string UnprocessString(string s) => s.Replace("\n", "<NewLine />").Replace("\t", "<Indent />").Replace("-", "<Hyphen />");
+    public static string UnprocessString(string s) => s.Replace("\n", "<NewLine />").Replace("\t", "<Indent />").Replace("-", "<Hyphen />").Replace("*", "<Italics />");
 
     private static void XmlRepr(StringBuilder sb, SeString s)
     {
@@ -142,6 +147,8 @@ internal class MapTextureGenerator
         {
             if (basePayload is TextPayload t)
                 sb.Append(t.RawString);
+            else if (basePayload.PayloadType == PayloadType.Italics)
+                sb.Append("<Italics />");
             else if (!basePayload.Expressions.Any())
                 sb.Append($"<{basePayload.PayloadType} />");
             else
@@ -202,26 +209,31 @@ public record Icon
     public bool UseWorld { get; set; }
     public float Scale { get; set; }
     public Color OverlayColor { get; set; } = Color.White;
+    public bool IsMapIcon { get; set; }
 
     public int MapX(int mapWidth, Map map) =>
         UseWorld switch
         {
-            false => (int)(X / 42.0 * mapWidth),
+            false => (int)(WorldToMap(MapToWorld(X, map.SizeFactor, map.OffsetX), map.SizeFactor, map.OffsetX) / ScaleMap(map) * mapWidth),
             true => (int)(WorldToMap(X, map.SizeFactor, map.OffsetX) / 42 * mapWidth)
         };
 
     public int MapY(int mapHeight, Map map) =>
         UseWorld switch
         {
-            false => (int)(Y / 42.0 * mapHeight),
+            false => (int)(WorldToMap(MapToWorld(Y, map.SizeFactor, map.OffsetY), map.SizeFactor, map.OffsetY) / ScaleMap(map) * mapHeight),
             true => (int)(WorldToMap(Y, map.SizeFactor, map.OffsetY) / 42 * mapHeight)
         };
 
+    private static float ScaleMap(Map map) => 4200.0f / map.SizeFactor + 0.012f * (map.SizeFactor - 100);
+
     private static float WorldToMap(float value, uint scale, int offset) => 0.02f * offset + 2048f / scale + 0.02f * value + .5f;
+
+    private static float MapToWorld(float value, uint scale, int offset) => 50 * value - offset - 102400f / scale - 25;
 
     public override string ToString()
     {
-        return $"{Id},{X},{Y},{UseWorld},{Scale},{OverlayColor.R:X} {OverlayColor.G:X} {OverlayColor.B:X}";
+        return $"{Id},{X},{Y},{UseWorld},{Scale},{OverlayColor.R:X} {OverlayColor.G:X} {OverlayColor.B:X},{IsMapIcon}";
     }
 }
 

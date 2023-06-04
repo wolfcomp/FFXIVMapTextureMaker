@@ -166,7 +166,8 @@ public class Program
                     Y = float.Parse(args[2]),
                     UseWorld = bool.Parse(args[3]),
                     Scale = float.Parse(args[4]),
-                    OverlayColor = Color.FromArgb(color[0], color[1], color[2])
+                    OverlayColor = Color.FromArgb(color[0], color[1], color[2]),
+                    IsMapIcon = bool.Parse(args[6])
                 };
             }).ToList();
             MapTextureGenerator.Texts = File.ReadAllLines(filePath + ".texts.csv").Skip(1).Select(t =>
@@ -233,9 +234,10 @@ public class Program
 
         output = output.Split(".")[0];
         var bitmap = new Bitmap(_baseTexture);
-        bitmap = MapTextureGenerator.Icons.Aggregate(bitmap, (current, icon) => MapTextureGenerator.AddIconToMap(current, icon.Id, icon.MapX(_baseTexture.Width, _selectedMap), icon.MapY(_baseTexture.Height, _selectedMap), icon.Scale, icon.OverlayColor));
         using var g = Graphics.FromImage(bitmap);
-        var p = MapTextureGenerator.Texts.Select(text => MapTextureGenerator.AddTextToMap(text.Item3, (int)(text.Item1 / 42 * _baseTexture.Width), (int)(text.Item2 / 42 * _baseTexture.Height), text.Item4, text.Item5)).Where(t => t != null).ToArray();
+        bitmap = MapTextureGenerator.Icons.Where(t => t.IsMapIcon).Aggregate(bitmap, (current, icon) => 
+            MapTextureGenerator.AddIconToMap(current, icon.Id, icon.MapX(_baseTexture.Width, _selectedMap), icon.MapY(_baseTexture.Height, _selectedMap), icon.Scale, icon.OverlayColor));
+        var p = MapTextureGenerator.Texts.Select(text => MapTextureGenerator.AddTextToMap(text.Item3, (int)(text.Item1 / ScaleMap * _baseTexture.Width), (int)(text.Item2 / ScaleMap * _baseTexture.Height), text.Item4, text.Item5, text.Item6)).Where(t => t != null).ToArray();
         g.InterpolationMode = InterpolationMode.High;
         g.SmoothingMode = SmoothingMode.HighQuality;
         g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
@@ -244,10 +246,13 @@ public class Program
         {
             g.DrawImage(b, point);
         }
+        bitmap = MapTextureGenerator.Icons.Where(t => !t.IsMapIcon).Aggregate(bitmap, (current, icon) => MapTextureGenerator.AddIconToMap(current, icon.Id, icon.MapX(_baseTexture.Width, _selectedMap), icon.MapY(_baseTexture.Height, _selectedMap), icon.Scale, icon.OverlayColor));
         bitmap.Save(output + ".png");
-        File.WriteAllLines(output + ".icons.csv", MapTextureGenerator.Icons.Select(t => t.ToString()).Prepend("Id,X,Y,UseWorld,Scale,OverlayColor"));
+        File.WriteAllLines(output + ".icons.csv", MapTextureGenerator.Icons.Select(t => t.ToString()).Prepend("Id,X,Y,UseWorld,Scale,OverlayColor,MapIcon"));
         File.WriteAllLines(output + ".texts.csv", MapTextureGenerator.Texts.Select(t => $"{t.Item1},{t.Item2},{MapTextureGenerator.UnprocessString(t.Item3)},{t.Item4},{t.Item5},{t.Item6.R:X} {t.Item6.G:X} {t.Item6.B:X}").Prepend("X,Y,Text,Orientation,FontSize,Color"));
     }
+
+    private float ScaleMap => 4200.0f / _selectedMap.SizeFactor + 0.012f * (_selectedMap.SizeFactor - 100);
 
     private async Task ProcessFurtherCommands()
     {
