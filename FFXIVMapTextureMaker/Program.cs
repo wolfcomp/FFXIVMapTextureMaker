@@ -11,14 +11,15 @@ namespace FFXIVMapTextureMaker;
 
 public class Program
 {
-    public static GameData GameData;
-    public static TextLayer TextLayer;
+    public static GameData GameData = null!;
+    public static TextLayer TextLayer = null!;
     private int _page;
-    private List<Map> maps;
-    private Map _selectedMap;
-    private Bitmap _baseTexture;
-    private RootCommand _rootCommand;
-    private bool handleCommands;
+    private List<Map> maps = null!;
+    private Map _selectedMap = null!;
+    private Bitmap _baseTexture = null!;
+    private RootCommand _rootCommand = null!;
+    private bool _handleCommands;
+    private bool _hideSpoilers;
 
     public static void Main(string[] args)
     {
@@ -31,7 +32,7 @@ public class Program
         Console.WriteLine("By: Wolfcomp");
         Console.WriteLine($"Version: {Assembly.GetExecutingAssembly().GetName().Version}");
         Console.WriteLine("");
-        DirectoryInfo gamePath = new DirectoryInfo(@"C:\Program Files (x86)\SquareEnix\FINAL FANTASY XIV - A Realm Reborn\game\sqpack");
+        var gamePath = new DirectoryInfo(@"C:\Program Files (x86)\SquareEnix\FINAL FANTASY XIV - A Realm Reborn\game\sqpack");
         while (!gamePath.Exists)
         {
             Console.WriteLine("Could not find the path of the game location of sqpack please input it:");
@@ -42,7 +43,7 @@ public class Program
                 Console.WriteLine("Not a valid input try again.");
                 goto inputGameDir;
             }
-            gamePath = new DirectoryInfo(path);
+            gamePath = new DirectoryInfo(path!);
         }
         Console.WriteLine("Loading Game Data...");
         GameData = new GameData(gamePath.FullName, new LuminaOptions
@@ -90,8 +91,12 @@ public class Program
                     var i = (int)input.Key - 49;
                     _selectedMap = maps.Skip(_page * 9).Take(9).Skip(i).First();
                     Console.WriteLine($"Generating base texture for {_selectedMap.PlaceName.Value?.Name}");
-                    _baseTexture = MapTextureGenerator.GenerateBaseTexture(_selectedMap);
+                    _baseTexture = MapTextureGenerator.GenerateBaseTexture(_selectedMap, _hideSpoilers);
                     await ProcessFurtherCommands();
+                    PrintMaps();
+                    break;
+                case ConsoleKey.H:
+                    _hideSpoilers = !_hideSpoilers;
                     PrintMaps();
                     break;
                 default:
@@ -106,12 +111,16 @@ public class Program
     {
         _rootCommand = new RootCommand();
         var generateOption = new Option<string>("--output", "The output file to save the texture to.");
+        var generateMinimal = new Option<bool>("--minimal", "Generates just the texture without exporting texts and icons files.");
+        var generateBase = new Option<bool>("--base", "Generates just the base texture without texts and icons files.");
         var generate = new Command("generate")
         {
-            generateOption
+            generateOption,
+            generateMinimal,
+            generateBase
         };
         generate.AddAlias("save");
-        generate.SetHandler(GenerateTexture, generateOption);
+        generate.SetHandler(GenerateTexture, generateOption, generateMinimal, generateBase);
         _rootCommand.AddCommand(generate);
         var addId = new Option<int>("--id", "The id of the icon.");
         var scale = new Option<float>("--scale", "Scale the icon.");
@@ -186,7 +195,7 @@ public class Program
         var newCommand = new Command("new");
         newCommand.SetHandler(() =>
         {
-            handleCommands = false;
+            _handleCommands = false;
         });
         _rootCommand.AddCommand(newCommand);
     }
@@ -218,7 +227,7 @@ public class Program
         }
     }
 
-    private void GenerateTexture(string? output)
+    private void GenerateTexture(string? output, bool minimal, bool @base)
     {
         if (output == null)
         {
@@ -234,20 +243,24 @@ public class Program
 
         output = output.Split(".")[0];
         var bitmap = new Bitmap(_baseTexture);
-        using var g = Graphics.FromImage(bitmap);
-        bitmap = MapTextureGenerator.Icons.Where(t => t.IsMapIcon).Aggregate(bitmap, (current, icon) => 
-            MapTextureGenerator.AddIconToMap(current, icon.Id, icon.MapX(_baseTexture.Width, _selectedMap), icon.MapY(_baseTexture.Height, _selectedMap), icon.Scale, icon.OverlayColor));
-        var p = MapTextureGenerator.Texts.Select(text => MapTextureGenerator.AddTextToMap(text.Item3, (int)(text.Item1 / ScaleMap * _baseTexture.Width), (int)(text.Item2 / ScaleMap * _baseTexture.Height), text.Item4, text.Item5, text.Item6)).Where(t => t != null).ToArray();
-        g.InterpolationMode = InterpolationMode.High;
-        g.SmoothingMode = SmoothingMode.HighQuality;
-        g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
-        g.CompositingQuality = CompositingQuality.HighQuality;
-        foreach (var (b, point) in p)
+        if (!@base)
         {
-            g.DrawImage(b, point);
+            using var g = Graphics.FromImage(bitmap);
+            bitmap = MapTextureGenerator.Icons.Where(t => t.IsMapIcon).Aggregate(bitmap, (current, icon) =>
+                MapTextureGenerator.AddIconToMap(current, icon.Id, icon.MapX(_baseTexture.Width, _selectedMap), icon.MapY(_baseTexture.Height, _selectedMap), icon.Scale, icon.OverlayColor));
+            var p = MapTextureGenerator.Texts.Select(text => MapTextureGenerator.AddTextToMap(text.Item3, (int)(text.Item1 / ScaleMap * _baseTexture.Width), (int)(text.Item2 / ScaleMap * _baseTexture.Height), text.Item4, text.Item5, text.Item6)).Where(t => t != null).Cast<Tuple<Bitmap, PointF>>().ToArray();
+            g.InterpolationMode = InterpolationMode.High;
+            g.SmoothingMode = SmoothingMode.HighQuality;
+            g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+            g.CompositingQuality = CompositingQuality.HighQuality;
+            foreach (var (b, point) in p)
+            {
+                g.DrawImage(b, point);
+            }
+            bitmap = MapTextureGenerator.Icons.Where(t => !t.IsMapIcon).Aggregate(bitmap, (current, icon) => MapTextureGenerator.AddIconToMap(current, icon.Id, icon.MapX(_baseTexture.Width, _selectedMap), icon.MapY(_baseTexture.Height, _selectedMap), icon.Scale, icon.OverlayColor));
         }
-        bitmap = MapTextureGenerator.Icons.Where(t => !t.IsMapIcon).Aggregate(bitmap, (current, icon) => MapTextureGenerator.AddIconToMap(current, icon.Id, icon.MapX(_baseTexture.Width, _selectedMap), icon.MapY(_baseTexture.Height, _selectedMap), icon.Scale, icon.OverlayColor));
         bitmap.Save(output + ".png");
+        if (minimal) return;
         File.WriteAllLines(output + ".icons.csv", MapTextureGenerator.Icons.Select(t => t.ToString()).Prepend("Id,X,Y,UseWorld,Scale,OverlayColor,MapIcon"));
         File.WriteAllLines(output + ".texts.csv", MapTextureGenerator.Texts.Select(t => $"{t.Item1},{t.Item2},{MapTextureGenerator.UnprocessString(t.Item3)},{t.Item4},{t.Item5},{t.Item6.R:X} {t.Item6.G:X} {t.Item6.B:X}").Prepend("X,Y,Text,Orientation,FontSize,Color"));
     }
@@ -257,8 +270,8 @@ public class Program
     private async Task ProcessFurtherCommands()
     {
         SetupCommandArgs();
-        handleCommands = true;
-        while (handleCommands)
+        _handleCommands = true;
+        while (_handleCommands)
         {
             var line = Console.ReadLine()?.Split(" ");
             if (line == null)
@@ -285,5 +298,6 @@ public class Program
         Console.WriteLine("0: Exit");
         Console.WriteLine("N: Next Page");
         Console.WriteLine("P: Previous Page");
+        Console.WriteLine($"H: {(_hideSpoilers ? "Show" : "Hide")} Spoilers");
     }
 }

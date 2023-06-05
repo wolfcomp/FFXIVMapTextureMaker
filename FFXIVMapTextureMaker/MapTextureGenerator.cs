@@ -22,7 +22,7 @@ internal class MapTextureGenerator
 
     public static int IconUidNext;
 
-    public static unsafe Bitmap GenerateBaseTexture(Map map, string size)
+    public static unsafe Bitmap GenerateBaseTexture(Map map, string size, bool hideSpoilers)
     {
         var fileName = map.Id.ToString().Replace("/", "");
         var filePath = string.Format(_mapFileFormat, map.Id, fileName, string.Empty, size);
@@ -42,7 +42,9 @@ internal class MapTextureGenerator
             }
         }
 
-        var mapMarkers = Program.GameData.GetExcelSheet<MapMarker>()!.Where(t => t.RowId == map.MapMarkerRange);
+        var mapMarkers = Program.GameData.GetExcelSheet<MapMarker>()!.Where(t => t.RowId == map.MapMarkerRange).ToArray();
+        if (hideSpoilers)
+            mapMarkers = mapMarkers.Where(t => t.Unknown10 == 0).ToArray();
         foreach (var mapMarker in mapMarkers)
         {
             var x = mapMarker.X / 2048f * (4200f / map.SizeFactor + 0.012f * (map.SizeFactor - 100f));
@@ -76,9 +78,9 @@ internal class MapTextureGenerator
         return img;
     }
 
-    public static Bitmap GenerateBaseTexture(Map map)
+    public static Bitmap GenerateBaseTexture(Map map, bool hideSpoilers)
     {
-        return GenerateBaseTexture(map, "m");
+        return GenerateBaseTexture(map, "m", hideSpoilers);
     }
 
     public static unsafe Bitmap AddIconToMap(Bitmap bitmap, int icon, int x, int y, float scale, Color overlay)
