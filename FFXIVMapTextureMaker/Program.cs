@@ -4,6 +4,8 @@ using System.Drawing.Drawing2D;
 using System.Drawing.Text;
 using System.Globalization;
 using System.Reflection;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Lumina;
 using Lumina.Excel.GeneratedSheets;
 
@@ -33,6 +35,13 @@ public class Program
         Console.WriteLine($"Version: {Assembly.GetExecutingAssembly().GetName().Version}");
         Console.WriteLine("");
         var gamePath = new DirectoryInfo(@"C:\Program Files (x86)\SquareEnix\FINAL FANTASY XIV - A Realm Reborn\game\sqpack");
+        var xivLauncherPath = new FileInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "XIVLauncher", "launcherConfigV3.json"));
+        if (!gamePath.Exists && xivLauncherPath.Exists)
+        {
+            Console.WriteLine("Could not find pre programmed path checking with XIVLauncher location");
+            JsonDocument.Parse(xivLauncherPath.OpenText().ReadToEnd()).RootElement.TryGetProperty("GamePath", out var gamePathElement);
+            gamePath = new DirectoryInfo(Path.Combine(gamePathElement.GetString()!, "game", "sqpack"));
+        }
         while (!gamePath.Exists)
         {
             Console.WriteLine("Could not find the path of the game location of sqpack please input it:");
@@ -90,7 +99,7 @@ public class Program
                 case ConsoleKey.D9:
                     var i = (int)input.Key - 49;
                     _selectedMap = maps.Skip(_page * 9).Take(9).Skip(i).First();
-                    Console.WriteLine($"Generating base texture for {_selectedMap.PlaceName.Value?.Name}");
+                    Console.WriteLine($"Generating base texture for {_selectedMap.PlaceName.Value?.Name} - {_selectedMap.PlaceNameSub.Value?.Name}");
                     _baseTexture = MapTextureGenerator.GenerateBaseTexture(_selectedMap, _hideSpoilers);
                     await ProcessFurtherCommands();
                     PrintMaps();
@@ -270,6 +279,8 @@ public class Program
     private async Task ProcessFurtherCommands()
     {
         SetupCommandArgs();
+        Console.WriteLine("Generated base map in memory.");
+        await _rootCommand.InvokeAsync("-h");
         _handleCommands = true;
         while (_handleCommands)
         {
